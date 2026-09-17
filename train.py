@@ -16,7 +16,6 @@ def train():
         state_old = state_new
         final_move = agent.get_action(state_old, agent.n_game)
         reward, done, score = game.play_step(final_move)
-        reward = agent.best_reward
         state_new = game.get_state()
         agent.remember(state_old, final_move, reward, state_new, done)
         agent.train_long_memory(batch_size=256)
@@ -27,18 +26,20 @@ def train():
 
         if done:
             game.reset()
+            state_new = game.get_state()
             agent.n_game += 1
             if score > record:
                 record = score
-                agent.trainer.save(best_reward=reward, epoch=agent.n_game)
+                agent.trainer.save(best_reward=record, epoch=agent.n_game)
             print('Game', agent.n_game, 'Score', score, 'Record', record)
             plot_scores.append(score)
             mean_scores = np.mean(plot_scores[-10:])
             plot_mean_scores.append(mean_scores)
             plot(plot_scores, plot_mean_scores)
 
-        if reward >= 3:
-            agent.trainer.save(best_reward=reward, epoch=agent.n_game)
+        # 使用整局得分判断目标，避免吃到一次食物（reward=10）就停止训练。
+        if done and score >= 3:
+            agent.trainer.save(best_reward=record, epoch=agent.n_game)
             break
 
 def play():
@@ -57,6 +58,7 @@ def play():
 
         if done:
             game.reset()
+            state_new = game.get_state()
             agent.n_game += 1
             if score > record:
                 record = score

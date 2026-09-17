@@ -1,0 +1,6 @@
+numpy
+pygame
+torch
+matplotlib
+ipython
+networkx>=3.2

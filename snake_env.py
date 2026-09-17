@@ -3,6 +3,7 @@ import random
 from collections import namedtuple
 from pygame.locals import QUIT
 import numpy as np
+import networkx as nx
 import sys
 
 Position = namedtuple('Point', 'x, y')
@@ -120,6 +121,7 @@ class Game:
         self.snake = Snake(self.block_size)
         self.berry = Berry(self.block_size)
         self.wall = Wall(self.block_size)
+        self.path_graph = self.build_path_graph()
 
         # 输入的特征值
         self.nS = 34
@@ -143,6 +145,38 @@ class Game:
         self.total_step = 0
         self.reward = 0.0
         self.prev_head = self.snake.blocks[0]
+        self.prev_blocks = tuple(self.snake.blocks)
+
+    def build_path_graph(self):
+        """缓存地图的四邻接图，蛇身在每次搜索时动态过滤。"""
+        graph = nx.Graph()
+        for y in range(1, self.space_h + 1):
+            for x in range(1, self.space_w + 1):
+                point = Position(x, y)
+                if not self.head_hit_wall(point):
+                    graph.add_node(point)
+        for point in list(graph):
+            for neighbor in (Position(point.x + 1, point.y),
+                             Position(point.x, point.y + 1)):
+                if neighbor in graph:
+                    graph.add_edge(point, neighbor)
+        return graph
+
+    def food_path_distance(self, blocks):
+        """当前蛇身视为静态障碍；不可达时返回有限距离，避免 NaN。"""
+        head = blocks[0]
+        body = set(blocks[1:])
+        graph = nx.subgraph_view(self.path_graph,
+                                 filter_node=lambda point: point not in body)
+        unreachable = len(self.path_graph)
+        if head not in graph or self.berry.position not in graph:
+            return unreachable
+        try:
+            return nx.astar_path_length(
+                graph, head, self.berry.position,
+                heuristic=lambda a, b: abs(a.x - b.x) + abs(a.y - b.y))
+        except nx.NetworkXNoPath:
+            return unreachable
 
     def position_berry(self):
         bx = random.randint(1, self.space_w)
@@ -179,16 +213,17 @@ class Game:
         return False
 
     def compute_reward(self, ate_berry):
-        head = self.snake.blocks[0]
         reward = -0.1
 
         if ate_berry:
             reward = 10.0
             return reward
 
-        prev_dist = abs(self.prev_head.x - self.berry.position.x) + abs(self.prev_head.y - self.berry.position.y)
-        curr_dist = abs(head.x - self.berry.position.x) + abs(head.y - self.berry.position.y)
-        reward += (prev_dist - curr_dist) * 0.1
+        prev_dist = self.food_path_distance(self.prev_blocks)
+        curr_dist = self.food_path_distance(self.snake.blocks)
+        # 蛇身移动可能让路径长度突变，限制塑形奖励以保留终局奖励的主导作用。
+        progress = max(-1, min(1, prev_dist - curr_dist))
+        reward += progress * 0.1
 
         return reward
     def draw_data(self):
@@ -208,7 +243,7 @@ class Game:
     # main loop
     def play_step(self, action):
         game_over = False
-        self.reword = 0.0
+        self.reward = 0.0
 
         for event in pygame.event.get():
             if event.type == QUIT:
@@ -220,6 +255,7 @@ class Game:
 
         # 用于保存前一次蛇的位置
         self.prev_head = self.snake.blocks[0]
+        self.prev_blocks = tuple(self.snake.blocks)
 
         self.snake.handle_action(action)
         ate_berry = self.berry_collision()
@@ -230,13 +266,13 @@ class Game:
             game_over = True
             # 惩罚机制
             self.reward = -10
-            return self.reword, game_over, self.score
+            return self.reward, game_over, self.score
 
         self.reward = self.compute_reward(ate_berry)
 
         self.draw()
         self.Clock.tick(60)
-        return self.reword, game_over, self.score
+        return self.reward, game_over, self.score
 
 
     def get_state(self):
