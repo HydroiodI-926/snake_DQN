@@ -7,7 +7,12 @@ import torch
 from helper import plot
 
 from snake_env import Game, Direction, Position
-from Agent import Agent, Transition
+from Agent import Agent, Transition, Linear_QNet
+
+import matplotlib as plt
+from pathlib import Path
+
+plt.use("Agg")
 
 def epsilon_by_step(step, start=1.0, end=0.05, decay_steps=30_000):
     ratio = min(step / decay_steps, 1.0)
@@ -172,6 +177,7 @@ def train_v2(
 
         if done:
             episode += 1
+            agent.n_game += 1
             recent_scores.append(score)
 
             game.reset()
@@ -184,6 +190,21 @@ def train_v2(
                     f"epsilon={epsilon:.3f}, "
                     f"score={score}, "
                     f"mean100={np.mean(recent_scores):.3f}"
+                )
+
+                save_dir = Path("./model_v2")
+                save_dir.mkdir(parents=True, exist_ok=True)
+
+                torch.save(
+                    {
+                        "model_state_dict": agent.trainer.model.state_dict(),
+                        "target_state_dict": agent.trainer.target_model.state_dict(),
+                        "optimizer_state_dict": agent.trainer.optimizer.state_dict(),
+                        "steps": total_steps,
+                        "episodes": episode,
+                        "mean100": float(np.mean(recent_scores)),
+                    },
+                    save_dir / "model.pth"
                 )
 
     print(
@@ -255,7 +276,75 @@ def play():
                 record = score
             print('Game', agent.n_game, 'Score', score, 'Record', record)
 
+def select_play_action(model, game, state):
+    legal_actions = get_legal_actions(game)
+
+    with torch.no_grad():
+        state_tensor = torch.as_tensor(
+            state,
+            dtype=torch.float32
+        )
+
+        q_values = model(state_tensor)
+
+        # 保留与训练时一致的必死动作掩码
+        masked_q = torch.full_like(
+            q_values,
+            float("-inf")
+        )
+        masked_q[legal_actions] = q_values[legal_actions]
+
+        return int(masked_q.argmax().item())
+
+
+def play_v2(episodes=10):
+    game = Game()
+
+    model = Linear_QNet(
+        input_size=game.nS,
+        hidden_size=128,
+        output_size=game.nA
+    )
+
+    checkpoint = torch.load(
+        "./model_v2/model.pth",
+        map_location="cpu",
+        weights_only=False
+    )
+
+    model.load_state_dict(
+        checkpoint["model_state_dict"]
+    )
+    model.eval()
+
+    state = game.get_state()
+    episode = 0
+
+    while episode < episodes:
+        # 纯贪心运行，不进行随机探索
+        action = select_play_action(
+            model,
+            game,
+            state
+        )
+
+        _, done, score = game.play_step(action)
+        state = game.get_state()
+
+        if done:
+            episode += 1
+
+            print(
+                f"Play episode={episode}, "
+                f"score={score}"
+            )
+
+            game.reset()
+            state = game.get_state()
+
+
 if __name__ == '__main__':
     # train()
     # play()
     train_v2(max_steps=5_000, render=False)
+    # play_v2(episodes=10)
